@@ -29,10 +29,13 @@ public class DisintegrationManager : MonoBehaviour
     private NativeArray<int> results;
     private GraphicsBuffer resultsBuffer;
     
-    private void Awake()
+    private void Start()
     {
-        neighbouringTris = new NativeArray<int3>(neighbouringTrisArray, Allocator.Persistent);
-        neighbouringTrisShort = new NativeArray<ushort>(neighbouringTrisShortArray, Allocator.Persistent);
+        if(neighbouringTrisArray != null)
+            neighbouringTris = new NativeArray<int3>(neighbouringTrisArray, Allocator.Persistent);
+        if(neighbouringTrisShortArray != null)
+            neighbouringTrisShort = new NativeArray<ushort>(neighbouringTrisShortArray, Allocator.Persistent);
+        
         resultsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, mesh.vertexCount, sizeof(int));
     }
 
@@ -107,6 +110,9 @@ public class DisintegrationManager : MonoBehaviour
 
     private void Update()
     {
+        Shader.SetGlobalMatrix("_InverseProjectionMatrix", mainCamera.projectionMatrix.inverse);
+
+
         Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
         if (Input.GetMouseButton(0) && Physics.Raycast(ray, out RaycastHit hit))
         {
