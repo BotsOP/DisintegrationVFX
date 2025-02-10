@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
@@ -10,6 +11,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Serialization;
 using VInspector;
+using VInspector.Libs;
 
 [BurstCompile]
 public class DisintegrationManager : MonoBehaviour
@@ -28,7 +30,9 @@ public class DisintegrationManager : MonoBehaviour
     private NativeArray<ushort> neighbouringTrisShort;
     private NativeArray<int> results;
     private GraphicsBuffer resultsBuffer;
-    
+    private NativeArray<float> result;
+    private NativeArray<float3> vertices;
+
     private void Start()
     {
         if(neighbouringTrisArray != null)
@@ -37,6 +41,16 @@ public class DisintegrationManager : MonoBehaviour
             neighbouringTrisShort = new NativeArray<ushort>(neighbouringTrisShortArray, Allocator.Persistent);
         
         resultsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, mesh.vertexCount, sizeof(int));
+        mesh.MarkDynamic();
+        
+        List<Vector3> verticesList = new List<Vector3>();
+        mesh.GetVertices(verticesList);
+        vertices = new NativeArray<float3>(verticesList.Count, Allocator.Persistent);
+            
+        Vector3ToFloat3 vector3ToFloat3 = new Vector3ToFloat3(verticesList.ToNativeArray(Allocator.TempJob), vertices);
+        JobHandle jobHandle = new JobHandle();
+        jobHandle = vector3ToFloat3.ScheduleParallel(verticesList.Count, 64, jobHandle);
+        jobHandle.Complete();
     }
 
     [Button]
@@ -111,23 +125,29 @@ public class DisintegrationManager : MonoBehaviour
     private void Update()
     {
         Shader.SetGlobalMatrix("_InverseProjectionMatrix", mainCamera.projectionMatrix.inverse);
-
+        
+        if (result.IsCreated)
+        {
+            result.Dispose();
+        }
 
         Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
         if (Input.GetMouseButton(0) && Physics.Raycast(ray, out RaycastHit hit))
         {
-            NativeArray<int> result = new NativeArray<int>(mesh.vertexCount, Allocator.TempJob);
+            result = new NativeArray<float>(mesh.vertexCount, Allocator.TempJob);
             List<ushort> indices = new List<ushort>();
             mesh.GetIndices(indices, 0);
             
-            FloodNeighbouringTriangles floodNeighbouringTriangles = new FloodNeighbouringTriangles(result, indices.ToNativeArray(Allocator.TempJob), neighbouringTrisShort, (ushort)hit.triangleIndex);
+            FloodNeighbouringTriangles floodNeighbouringTriangles = new FloodNeighbouringTriangles(result, vertices, indices.ToNativeArray(Allocator.TempJob), neighbouringTrisShort, (ushort)hit.triangleIndex);
             floodNeighbouringTriangles.Schedule().Complete();
+            material.SetFloat("_MaxDistance", floodNeighbouringTriangles.maxDistance[0]);
             floodNeighbouringTriangles.Dispose();
-            resultsBuffer.SetData(result);
             
-            material.SetBuffer("_Result", resultsBuffer);
-            
-            result.Dispose();
+            // resultsBuffer.SetData(result);
+            // material.SetBuffer("_Result", resultsBuffer);
+            mesh.SetUVs(0, result);
+            material.SetVector("_RotationDirection", hit.point);
+            // mesh.UploadMeshData(false);
         }
     }
 
@@ -140,38 +160,41 @@ public class DisintegrationManager : MonoBehaviour
             neighbouringTris.Dispose();
         
         resultsBuffer?.Dispose();
+        vertices.Dispose();
     }
     
     [BurstCompile]
     private struct FloodNeighbouringTriangles : IJob
     {
-        [WriteOnly]
-        public NativeArray<int> result;
-        [ReadOnly]
-        private NativeArray<ushort> neighbouringTrisShort;
-        [ReadOnly]
-        private NativeArray<ushort> indices;
+        public NativeArray<float> result;
+        public NativeArray<float> maxDistance;
+        [ReadOnly] private NativeArray<ushort> neighbouringTrisShort;
+        [ReadOnly] private NativeArray<ushort> indices;
+        [ReadOnly] private NativeArray<float3> vertices;
         
         private NativeList<ushort> trianglesToVisit;
         private BoolArray trianglesVisited;
 
-        public FloodNeighbouringTriangles(NativeArray<int> result, NativeArray<ushort> indices, NativeArray<ushort> neighbouringTrisShort, ushort startTriangle) : this()
+        public FloodNeighbouringTriangles(NativeArray<float> result, NativeArray<float3> vertices, NativeArray<ushort> indices, NativeArray<ushort> neighbouringTrisShort, ushort startTriangle) : this()
         {
             this.result = result;
+            this.vertices = vertices;
             this.indices = indices;
             this.neighbouringTrisShort = neighbouringTrisShort;
             trianglesToVisit = new NativeList<ushort>((int)math.ceil(result.Length / 3f), Allocator.TempJob);
             trianglesToVisit.Add(startTriangle);
             trianglesVisited = new BoolArray((uint)indices.Length, Allocator.TempJob);
             trianglesVisited.Set(startTriangle, true);
+
+            maxDistance = new NativeArray<float>(1, Allocator.TempJob);
         }
 
         public void Execute()
         {
-            FloodNeighbours(0);
+            FloodNeighbours();
         }
 
-        private void FloodNeighbours(int wave)
+        private void FloodNeighbours()
         {
             int initialLength = trianglesToVisit.Length;
             if (initialLength == 0)
@@ -182,6 +205,9 @@ public class DisintegrationManager : MonoBehaviour
             for (int i = 0; i < initialLength; i++)
             {
                 ushort startIndex = trianglesToVisit[i];
+                float3 avgPos = (vertices[indices[startIndex * 3]] + vertices[indices[startIndex * 3 + 1]] + vertices[indices[startIndex * 3 + 2]]) / 3;
+                float avgWave = (result[indices[startIndex * 3]] + result[indices[startIndex * 3 + 1]] + result[indices[startIndex * 3 + 2]]) / 3;
+                float wave = 0;
                 ushort index1 = neighbouringTrisShort[startIndex * 3];
                 ushort index2 = neighbouringTrisShort[startIndex * 3 + 1];
                 ushort index3 = neighbouringTrisShort[startIndex * 3 + 2];
@@ -190,6 +216,9 @@ public class DisintegrationManager : MonoBehaviour
                 {
                     trianglesVisited.Set(index1, true);
                     trianglesToVisit.Add(index1);
+                    float3 avgPosVisited = (vertices[indices[index1 * 3]] + vertices[indices[index1 * 3 + 1]] + vertices[indices[index1 * 3 + 2]]) / 3;
+                    wave = math.distance(avgPos, avgPosVisited) + avgWave;
+                    maxDistance[0] = math.max(wave, maxDistance[0]);
                     result[indices[index1 * 3]] = wave;
                     result[indices[index1 * 3 + 1]] = wave;
                     result[indices[index1 * 3 + 2]] = wave;
@@ -199,6 +228,9 @@ public class DisintegrationManager : MonoBehaviour
                 {
                     trianglesVisited.Set(index2, true);
                     trianglesToVisit.Add(index2);
+                    float3 avgPosVisited = (vertices[indices[index2 * 3]] + vertices[indices[index2 * 3 + 1]] + vertices[indices[index2 * 3 + 2]]) / 3;
+                    wave = math.distance(avgPos, avgPosVisited) + avgWave;
+                    maxDistance[0] = math.max(wave, maxDistance[0]);
                     result[indices[index2 * 3]] = wave;
                     result[indices[index2 * 3 + 1]] = wave;
                     result[indices[index2 * 3 + 2]] = wave;
@@ -208,17 +240,21 @@ public class DisintegrationManager : MonoBehaviour
                 {
                     trianglesVisited.Set(index3, true);
                     trianglesToVisit.Add(index3);
+                    float3 avgPosVisited = (vertices[indices[index3 * 3]] + vertices[indices[index3 * 3 + 1]] + vertices[indices[index3 * 3 + 2]]) / 3;
+                    wave = math.distance(avgPos, avgPosVisited) + avgWave;
+                    maxDistance[0] = math.max(wave, maxDistance[0]);
                     result[indices[index3 * 3]] = wave;
                     result[indices[index3 * 3 + 1]] = wave;
                     result[indices[index3 * 3 + 2]] = wave;
                 }
             }
             trianglesToVisit.RemoveRangeSwapBack(0, initialLength);
-            FloodNeighbours(++wave);
+            FloodNeighbours();
         }
 
         public void Dispose()
         {
+            maxDistance.Dispose();
             trianglesToVisit.Dispose();
             trianglesVisited.Dispose();
             indices.Dispose();
