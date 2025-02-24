@@ -47,7 +47,7 @@ public class DisintegrationManager : MonoBehaviour
         mesh.GetVertices(verticesList);
         vertices = new NativeArray<float3>(verticesList.Count, Allocator.Persistent);
             
-        Vector3ToFloat3 vector3ToFloat3 = new Vector3ToFloat3(verticesList.ToNativeArray(Allocator.TempJob), vertices);
+        HelperJobs.Vector3ToFloat3 vector3ToFloat3 = new HelperJobs.Vector3ToFloat3(verticesList.ToNativeArray(Allocator.TempJob), vertices);
         JobHandle jobHandle = new JobHandle();
         jobHandle = vector3ToFloat3.ScheduleParallel(verticesList.Count, 64, jobHandle);
         jobHandle.Complete();
@@ -62,7 +62,7 @@ public class DisintegrationManager : MonoBehaviour
         mesh.GetVertices(verticesList);
         NativeArray<float3> vertices = new NativeArray<float3>(verticesList.Count, Allocator.Persistent);
             
-        Vector3ToFloat3 vector3ToFloat3 = new Vector3ToFloat3(verticesList.ToNativeArray(Allocator.TempJob), vertices);
+        HelperJobs.Vector3ToFloat3 vector3ToFloat3 = new HelperJobs.Vector3ToFloat3(verticesList.ToNativeArray(Allocator.TempJob), vertices);
         JobHandle jobHandle = new JobHandle();
         jobHandle = vector3ToFloat3.ScheduleParallel(verticesList.Count, 64, jobHandle);
         jobHandle.Complete();
@@ -262,26 +262,6 @@ public class DisintegrationManager : MonoBehaviour
     }
 
     [BurstCompile]
-    private struct Vector3ToFloat3 : IJobFor
-    {
-        [ReadOnly, DeallocateOnJobCompletion]
-        private NativeArray<Vector3> vertices0;
-        [WriteOnly]
-        private NativeArray<float3> vertices1;
-
-        public Vector3ToFloat3(NativeArray<Vector3> vertices0, NativeArray<float3> vertices1)
-        {
-            this.vertices0 = vertices0;
-            this.vertices1 = vertices1;
-        }
-        
-        public void Execute(int index)
-        {
-            vertices1[index] = vertices0[index];
-        }
-    }
-
-    [BurstCompile]
     private struct FindNeighbouringTriangles : IJobFor
     {
         [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<int3> neighbouringTriangles;
@@ -290,8 +270,8 @@ public class DisintegrationManager : MonoBehaviour
         [ReadOnly, DeallocateOnJobCompletion] private NativeArray<int> indices;
         [ReadOnly, DeallocateOnJobCompletion] private NativeArray<ushort> indicesShort;
         [ReadOnly, DeallocateOnJobCompletion] private NativeArray<float3> vertices;
-        private int amountTriangles;
-        private bool useShort;
+        private readonly int amountTriangles;
+        private readonly bool useShort;
 
         public FindNeighbouringTriangles(NativeArray<int3> neighbouringTriangles, NativeArray<int> indices, NativeArray<float3> vertices, int amountTriangles)
         {
